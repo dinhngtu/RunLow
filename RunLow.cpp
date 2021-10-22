@@ -9,6 +9,7 @@
 static constexpr bool do_duplicate = false;
 static constexpr bool do_restrict = true;
 static constexpr bool do_set_il = true;
+static constexpr bool do_set_linked = true;
 static constexpr bool do_impersonate = false;
 
 static std::wstring quote(std::wstring inp) {
@@ -48,7 +49,7 @@ int wmain(int argc, wchar_t* argv[], wchar_t* envp[]) {
     HANDLE dtok = INVALID_HANDLE_VALUE;
     if (do_duplicate) {
         if (!DuplicateTokenEx(ptok, TOKEN_ALL_ACCESS, NULL, SECURITY_MAX_IMPERSONATION_LEVEL, TokenPrimary, &dtok)) {
-            std::wcout << L"DuplicateTokenEx failed: " << GetLastError() << std::endl;
+            std::wcout << L"DuplicateTokenEx on process token failed: " << GetLastError() << std::endl;
             return 2;
         }
         CloseHandle(ptok);
@@ -101,7 +102,50 @@ int wmain(int argc, wchar_t* argv[], wchar_t* envp[]) {
         label.Label.Attributes = SE_GROUP_INTEGRITY;
 
         if (!SetTokenInformation(rtok, TokenIntegrityLevel, &label, sizeof(label) + sid_il_sz)) {
-            std::wcout << L"SetTokenInformation failed: " << GetLastError() << std::endl;
+            std::wcout << L"SetTokenInformation on restricted token failed: " << GetLastError() << std::endl;
+            return 2;
+        }
+        free(sid_il);
+    }
+
+    if (do_set_linked) {
+        TOKEN_LINKED_TOKEN link{};
+        DWORD linksz = sizeof(link);
+
+        if (!GetTokenInformation(rtok, TokenLinkedToken, &link, linksz, &linksz)) {
+            std::wcout << L"GetTokenInformation failed: " << GetLastError() << std::endl;
+            return 2;
+        }
+
+        DWORD sid_il_sz = SECURITY_MAX_SID_SIZE;
+        PSID sid_il = calloc(2, sid_il_sz);
+        if (!sid_il || !CreateWellKnownSid(WinHighLabelSid, NULL, sid_il, &sid_il_sz)) {
+            std::wcout << L"CreateWellKnownSid failed: " << GetLastError() << std::endl;
+            return 2;
+        }
+
+        TOKEN_MANDATORY_LABEL label{};
+        label.Label.Sid = sid_il;
+        label.Label.Attributes = SE_GROUP_INTEGRITY;
+
+        TOKEN_ELEVATION elev;
+        DWORD elev_sz = sizeof(elev);
+        if (!GetTokenInformation(rtok, TokenElevation, &elev, elev_sz, &elev_sz)) {
+            std::wcout << L"GetTokenInformation(TokenElevation) on restricted token failed: " << GetLastError() << std::endl;
+            return 2;
+        }
+        std::wcout << L"elev = " << elev.TokenIsElevated << std::endl;
+
+        TOKEN_ELEVATION_TYPE elevtype;
+        DWORD elevtype_sz = sizeof(elevtype);
+        if (!GetTokenInformation(rtok, TokenElevationType, &elevtype, elevtype_sz, &elevtype_sz)) {
+            std::wcout << L"GetTokenInformation(TokenElevationType) on restricted token failed: " << GetLastError() << std::endl;
+            return 2;
+        }
+        std::wcout << L"elevtype = " << elevtype << std::endl;
+
+        if (false && !SetTokenInformation(link.LinkedToken, TokenIntegrityLevel, &label, sizeof(label) + sid_il_sz)) {
+            std::wcout << L"SetTokenInformation on linked token failed: " << GetLastError() << std::endl;
             return 2;
         }
         free(sid_il);
@@ -127,7 +171,7 @@ int wmain(int argc, wchar_t* argv[], wchar_t* envp[]) {
         }
 
         if (!AdjustTokenPrivileges(ttok, FALSE, &privs, 0, NULL, NULL)) {
-            std::wcout << L"AdjustTokenPrivileges failed: " << GetLastError() << std::endl;
+            std::wcout << L"AdjustTokenPrivileges on current thread failed: " << GetLastError() << std::endl;
             return 2;
         }
     }
